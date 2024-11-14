@@ -415,7 +415,6 @@ const Configuration = () => {
             </div>
           </div>
         );
-
       default:
         return <div>Content for other tabs...</div>;
     }
