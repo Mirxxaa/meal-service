@@ -164,18 +164,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "bold",
   },
-
   inTheBoxTitle: {
     fontSize: 24,
     fontWeight: "bold",
     marginBottom: 10,
   },
-
   whatInTheBox: {
     marginBottom: 50,
     paddingHorizontal: 10,
   },
-
   inTheBoxDetails: {
     fontWeight: "bold",
     fontSize: 16,
