@@ -1,360 +1,532 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
-  TouchableOpacity,
-  Image,
-  Modal,
   ScrollView,
   StyleSheet,
-  Animated,
+  ActivityIndicator,
+  RefreshControl,
+  TouchableOpacity,
+  Modal,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Picker } from "@react-native-picker/picker";
+import { Calendar } from "react-native-calendars";
 import {
-  GestureHandlerRootView,
-  PanGestureHandler,
-} from "react-native-gesture-handler";
-import { Calendar } from "react-native-calendars"; // Importing Calendar component
-import caloriesIcon from "../../../assets/Cal.png";
-import proteinIcon from "../../../assets/Pro.png";
-import fatIcon from "../../../assets/Fat.png";
-import carbsIcon from "../../../assets/Carb.png";
-import Icon from "react-native-vector-icons/MaterialIcons";
+  getActiveSubscriptions,
+  getMenuForDate,
+  getSubscriptionDates,
+} from "../../utils/api";
 
 const SubscriptionPage = () => {
-  const [isVisible, setIsVisible] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(null);
-  const [translateY] = useState(new Animated.Value(0));
-  const [skippedDates, setSkippedDates] = useState(new Set()); // Track skipped dates
-  const [selectedMeal, setSelectedMeal] = useState(null); // Track selected meal for display
+  const [activeSubscriptions, setActiveSubscriptions] = useState([]);
+  const [selectedSubscription, setSelectedSubscription] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [menus, setMenus] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
 
-  const meals = {
-    0: {
-      name: "Chicken Salad",
-      description: "A healthy chicken salad with veggies.",
-      image:
-        "https://assets.epicurious.com/photos/64a845e67799ee8651e4fb8f/4:3/w_5322,h_3991,c_limit/AshaGrilledChickenSalad_RECIPE_070523_56498.jpg",
-      calories: 300,
-      protein: 25,
-      fat: 10,
-      carbs: 20,
-    },
-    1: {
-      name: "Dal Fry",
-      description: "A delicious stir-fry with mixed vegetables.",
-      image:
-        "https://tikkastotapas.com/wp-content/uploads/2021/08/IMG_9208-2.jpg",
-      calories: 250,
-      protein: 10,
-      fat: 5,
-      carbs: 30,
-    },
-    2: {
-      name: "Palak Paneer",
-      description: "Fresh veggies stir-fried to perfection.",
-      image:
-        "https://food-images.files.bbci.co.uk/food/recipes/palak_paneer_85769_16x9.jpg",
-      calories: 180,
-      protein: 5,
-      fat: 3,
-      carbs: 32,
-    },
-    3: {
-      name: "Chicken Biryani",
-      description: "Savory beef tacos with fresh toppings.",
-      image:
-        "https://c.ndtvimg.com/2023-03/7n07er7o_biryani_625x300_09_March_23.jpg",
-      calories: 400,
-      protein: 20,
-      fat: 20,
-      carbs: 30,
-    },
+  // Get correct day number based on weekday (Sun=1, Mon=2, etc)
+  const getAdminDayNumber = (date) => {
+    const dayOfWeek = new Date(date).getDay();
+    return dayOfWeek === 0 ? 1 : dayOfWeek + 1;
   };
 
-  // Function to generate marked dates
-  const getMarkedDates = () => {
-    const today = new Date();
-    const markedDates = {};
-    for (let i = -1; i < 30; i++) {
-      const date = new Date(today);
-      date.setDate(today.getDate() + i);
-      const dateString = date.toISOString().split("T")[0];
-      markedDates[dateString] = {
-        disabled: i < 0 || skippedDates.has(dateString),
-        color: i < 0 || skippedDates.has(dateString) ? "gray" : "white", // Gray out past and skipped dates
-      };
+  // Format date to YYYY-MM-DD
+  const formatDate = (date) => {
+    const d = new Date(date);
+    return d.toISOString().split("T")[0];
+  };
+
+  // Check if date is a delivery day based on plan duration
+  const isDeliveryDay = (date, planDuration) => {
+    const dayOfWeek = new Date(date).getDay();
+    switch (planDuration) {
+      case 5:
+        return dayOfWeek !== 5 && dayOfWeek !== 6; // Not Friday or Saturday
+      case 6:
+        return dayOfWeek !== 5; // Not Friday
+      case 7:
+        return true; // All days
+      default:
+        return false;
     }
-    markedDates[today.toISOString().split("T")[0]] = {
-      selected: selectedDate === today.toISOString().split("T")[0],
-    };
+  };
+
+  // Fetch initial data
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const subscriptionsRes = await getActiveSubscriptions();
+      const subscriptions = subscriptionsRes.data || [];
+      setActiveSubscriptions(subscriptions);
+
+      if (subscriptions.length > 0) {
+        const defaultSub = subscriptions[0];
+        setSelectedSubscription(defaultSub);
+        await fetchMenuForDate(selectedDate);
+      }
+    } catch (error) {
+      console.error("Error fetching data:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const handleSubscriptionChange = async (subscription) => {
+    try {
+      setLoading(true);
+      setSelectedSubscription(subscription);
+      await fetchMenuForDate(selectedDate);
+    } catch (error) {
+      console.error("Error changing subscription:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchMenuForDate = async (date) => {
+    try {
+      setLoading(true);
+      const formattedDate = formatDate(date);
+      const dayNumber = getAdminDayNumber(date).toString();
+      const menuRes = await getMenuForDate(formattedDate);
+
+      // Filter and process menus for the correct day
+      const filteredMenus = (menuRes.data || []).map((menu) => ({
+        ...menu,
+        dayNumber,
+      }));
+
+      setMenus(filteredMenus);
+    } catch (error) {
+      console.error("Error fetching menu:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDateSelect = (date) => {
+    const selectedDateTime = new Date(date.timestamp);
+    const isDateValid = isDeliveryDay(
+      selectedDateTime,
+      selectedSubscription?.plan.duration
+    );
+
+    if (isDateValid) {
+      setSelectedDate(selectedDateTime);
+      setShowCalendar(false);
+      fetchMenuForDate(selectedDateTime);
+    }
+  };
+
+  const getMarkedDates = () => {
+    if (!selectedSubscription) return {};
+
+    const markedDates = {};
+    const start = new Date(selectedSubscription.startDate);
+    const end = new Date(selectedSubscription.endDate);
+    let current = new Date(start);
+
+    while (current <= end) {
+      const dateString = formatDate(current);
+      const isDelivery = isDeliveryDay(
+        current,
+        selectedSubscription.plan.duration
+      );
+      const isSelected = formatDate(selectedDate) === dateString;
+
+      if (current >= start && current <= end) {
+        markedDates[dateString] = {
+          marked: isDelivery,
+          disabled: !isDelivery,
+          disableTouchEvent: !isDelivery,
+          selected: isSelected,
+          selectedColor: "#0066CC",
+          selectedTextColor: "#FFFFFF",
+        };
+      }
+
+      current.setDate(current.getDate() + 1);
+    }
+
     return markedDates;
   };
 
-  const onDaySelect = (day) => {
-    if (!skippedDates.has(day.dateString)) {
-      setSelectedDate(day.dateString);
-      setIsVisible(true);
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchData();
+    setRefreshing(false);
+  };
+
+  const renderSubscriptionPicker = () => {
+    if (!activeSubscriptions.length) return null;
+
+    return (
+      <View style={styles.pickerContainer}>
+        <Picker
+          selectedValue={selectedSubscription?.orderId}
+          onValueChange={(itemValue) => {
+            const subscription = activeSubscriptions.find(
+              (sub) => sub.orderId === itemValue
+            );
+            handleSubscriptionChange(subscription);
+          }}
+          style={styles.picker}
+        >
+          {activeSubscriptions.map((subscription) => (
+            <Picker.Item
+              key={subscription.orderId}
+              label={`${subscription.plan.planId.nameEnglish} (${subscription.plan.duration} days/week)`}
+              value={subscription.orderId}
+            />
+          ))}
+        </Picker>
+      </View>
+    );
+  };
+
+  const renderDateSelector = () => {
+    const dayNumber = getAdminDayNumber(selectedDate);
+    return (
+      <TouchableOpacity
+        style={styles.dateSelector}
+        onPress={() => setShowCalendar(true)}
+      >
+        <Text style={styles.dateSelectorText}>
+          {selectedDate.toLocaleDateString("en-US", {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+          })}
+        </Text>
+        <Text style={styles.dayNumber}>Day {dayNumber}</Text>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderCalendarModal = () => (
+    <Modal visible={showCalendar} transparent={true} animationType="slide">
+      <View style={styles.modalContainer}>
+        <View style={styles.calendarContainer}>
+          <Calendar
+            markedDates={getMarkedDates()}
+            minDate={selectedSubscription?.startDate}
+            maxDate={selectedSubscription?.endDate}
+            onDayPress={handleDateSelect}
+            theme={{
+              selectedDayBackgroundColor: "#0066CC",
+              selectedDayTextColor: "#FFFFFF",
+              todayTextColor: "#0066CC",
+              disabledTextColor: "#CCCCCC",
+            }}
+          />
+          <TouchableOpacity
+            style={styles.closeButton}
+            onPress={() => setShowCalendar(false)}
+          >
+            <Text style={styles.closeButtonText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  const renderMenuItems = (items) => {
+    if (!items || items.length === 0) {
+      return (
+        <View style={styles.noItemsContainer}>
+          <Text style={styles.noMenuText}>No items available for this day</Text>
+        </View>
+      );
     }
+
+    return items.map((item, index) => (
+      <View key={index} style={styles.menuItem}>
+        <View style={styles.menuItemHeader}>
+          <Text style={styles.menuItemName}>{item.nameEnglish}</Text>
+          <Text style={styles.menuItemCalories}>{item.calories} cal</Text>
+        </View>
+        <Text style={styles.menuItemNameAr}>{item.nameArabic}</Text>
+        <View style={styles.nutritionInfo}>
+          <Text style={styles.nutritionText}>P: {item.protein}g</Text>
+          <Text style={styles.nutritionText}>C: {item.carbs}g</Text>
+          <Text style={styles.nutritionText}>F: {item.fat}g</Text>
+        </View>
+      </View>
+    ));
   };
 
-  const togglePopup = () => {
-    setIsVisible(!isVisible);
-    setExpanded(false);
+  const renderSubscriptionMenu = (menu) => {
+    if (menu.subscriptionId !== selectedSubscription?.orderId) return null;
+
+    const dayNumber = getAdminDayNumber(selectedDate);
+
+    return (
+      <View key={menu.subscriptionId} style={styles.menuCard}>
+        <View style={styles.menuHeader}>
+          <Text style={styles.planName}>Day {dayNumber} Menu</Text>
+        </View>
+        {menu.packages.map((packageType) => (
+          <View key={packageType} style={styles.packageContainer}>
+            <Text style={styles.packageTitle}>
+              {packageType.charAt(0).toUpperCase() + packageType.slice(1)}
+            </Text>
+            <View style={styles.menuItemsContainer}>
+              {renderMenuItems(menu.menuItems[packageType])}
+            </View>
+          </View>
+        ))}
+      </View>
+    );
   };
 
-  const toggleExpand = () => {
-    setExpanded((prev) => !prev);
-  };
-
-  const collapsePopup = () => {
-    setExpanded(false);
-    Animated.timing(translateY, {
-      toValue: 0,
-      duration: 300,
-      useNativeDriver: true,
-    }).start();
-  };
-
-  const onGestureEvent = (event) => {
-    const { translationY } = event.nativeEvent;
-    if (translationY > 100) {
-      collapsePopup();
-    }
-  };
-
-  const skipDay = () => {
-    if (selectedDate) {
-      setSkippedDates((prev) => new Set(prev).add(selectedDate));
-      togglePopup();
-    }
-  };
-
-  const handleMealSelect = (meal) => {
-    setSelectedMeal(meal);
-  };
+  if (loading && !menus.length) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#0066CC" />
+      </View>
+    );
+  }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <View style={styles.container}>
-        <Calendar
-          onDayPress={onDaySelect}
-          markingType="multi-dot"
-          markedDates={getMarkedDates()}
-          theme={{
-            selectedDayBackgroundColor: "#00adf5",
-            todayTextColor: "#00adf5",
-            dayTextColor: "#2d4150",
-          }}
-        />
+    <SafeAreaView style={styles.container}>
+      <ScrollView
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
+      >
+        {renderSubscriptionPicker()}
+        {renderDateSelector()}
+        {renderCalendarModal()}
 
-        <Modal transparent visible={isVisible} animationType="slide">
-          <TouchableOpacity
-            style={styles.modalBackground}
-            onPress={togglePopup}
-            activeOpacity={1}
-          >
-            <View />
-          </TouchableOpacity>
-
-          <Animated.View
-            style={[
-              styles.popUpContainer,
-              { height: expanded ? "100%" : "60%" },
-            ]}
-          >
-            <PanGestureHandler onGestureEvent={onGestureEvent}>
-              <Animated.View style={{ transform: [{ translateY }] }}>
-                <View style={styles.mealImageContainer}>
-                  <Image
-                    source={{
-                      uri: selectedMeal ? selectedMeal.image : meals[0]?.image,
-                    }} // Use selected meal if available
-                    style={styles.mealImage}
-                  />
-                  <TouchableOpacity style={styles.skipButton} onPress={skipDay}>
-                    <Text style={styles.skipButtonText}>Skip the Day</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.mealInfoContainer}>
-                  <Text style={styles.mealName}>
-                    {selectedMeal ? selectedMeal.name : meals[0]?.name}
-                  </Text>
-                  <Text style={styles.mealDescription}>
-                    {selectedMeal
-                      ? selectedMeal.description
-                      : meals[0]?.description}
-                  </Text>
-                  <Text style={styles.selectedDateText}>
-                    Selected Date: {selectedDate || "None"}
-                  </Text>
-                </View>
-
-                <View style={styles.nutritionContainer}>
-                  <NutritionItem
-                    icon={caloriesIcon}
-                    value={
-                      selectedMeal ? selectedMeal.calories : meals[0]?.calories
-                    }
-                    label="Cal."
-                  />
-                  <NutritionItem
-                    icon={proteinIcon}
-                    value={
-                      selectedMeal ? selectedMeal.protein : meals[0]?.protein
-                    }
-                    label="Protein"
-                  />
-                  <NutritionItem
-                    icon={fatIcon}
-                    value={selectedMeal ? selectedMeal.fat : meals[0]?.fat}
-                    label="Fat"
-                  />
-                  <NutritionItem
-                    icon={carbsIcon}
-                    value={selectedMeal ? selectedMeal.carbs : meals[0]?.carbs}
-                    label="Carbs"
-                  />
-                </View>
-
-                <TouchableOpacity
-                  onPress={toggleExpand}
-                  style={styles.expandButton}
-                >
-                  <Text>
-                    <Icon
-                      name={expanded ? "arrow-drop-up" : "arrow-drop-down"}
-                      size={30} // Adjust size as needed
-                      color="#000" // Change color as needed
-                    />
-                  </Text>
-                </TouchableOpacity>
-
-                {expanded && (
-                  <ScrollView style={styles.itemList}>
-                    {Object.values(meals).map((meal, index) => (
-                      <TouchableOpacity
-                        key={index}
-                        onPress={() => handleMealSelect(meal)}
-                        style={styles.mealOption}
-                      >
-                        <Image
-                          source={{ uri: meal.image }}
-                          style={styles.optionImage}
-                        />
-                        <Text style={styles.optionText}>{meal.name}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                )}
-              </Animated.View>
-            </PanGestureHandler>
-          </Animated.View>
-        </Modal>
-      </View>
-    </GestureHandlerRootView>
+        {loading ? (
+          <ActivityIndicator style={styles.menuLoader} color="#0066CC" />
+        ) : menus.length > 0 ? (
+          <View style={styles.menusContainer}>
+            {menus.map(renderSubscriptionMenu)}
+          </View>
+        ) : (
+          <View style={styles.noSubscriptionContainer}>
+            <Text style={styles.noSubscriptionText}>
+              No menu available for selected date
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+    </SafeAreaView>
   );
 };
-
-const NutritionItem = ({ icon, value, label }) => (
-  <View style={styles.nutritionItem}>
-    <Image source={icon} style={styles.nutritionIcon} />
-    <Text style={styles.nutritionTitle}>{value} g</Text>
-    <Text>{label}</Text>
-  </View>
-);
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f5f5f5",
+    backgroundColor: "#FFFFFF",
   },
-  modalBackground: {
+  loadingContainer: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
     justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
   },
-  popUpContainer: {
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+
+  // Picker Styles
+  pickerContainer: {
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E0E0E0",
+  },
+  picker: {
+    height: 50,
+    backgroundColor: "#F8F9FA",
+    borderRadius: 8,
+  },
+
+  // Date Selector Styles
+  dateSelector: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 16,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E0E0E0",
+  },
+  dateSelectorText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333333",
+  },
+  dayNumber: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#666666",
+    backgroundColor: "#F0F0F0",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+
+  // Calendar Modal Styles
+  modalContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+  },
+  calendarContainer: {
+    width: "90%",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  closeButton: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: "#0066CC",
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  closeButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "500",
+  },
+
+  // Menu Container
+  menusContainer: {
     padding: 16,
   },
-  mealImageContainer: {
-    alignItems: "center",
-    width: "100%",
-    aspectRatio: 16 / 9,
-    borderRadius: 20,
+  menuCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
     overflow: "hidden",
   },
-  mealImage: {
-    width: "100%",
-    height: "100%",
+  menuHeader: {
+    padding: 16,
+    backgroundColor: "#F8F9FA",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E0E0E0",
+  },
+  planName: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#333333",
   },
 
-  skipButton: {
-    marginTop: 10,
-    padding: 10,
-    position: "absolute",
-    right: 10,
-    backgroundColor: "#ff4444",
-    borderRadius: 5,
+  // Package Section
+  packageContainer: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E0E0E0",
   },
-  skipButtonText: {
-    color: "#fff",
+  packageTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333333",
+    marginBottom: 12,
+    backgroundColor: "#F8F9FA",
+    padding: 8,
+    borderRadius: 8,
   },
-  mealInfoContainer: {
-    paddingHorizontal: 10,
-    marginVertical: 10,
+  menuItemsContainer: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 8,
   },
-  mealName: {
-    fontSize: 22,
-    fontWeight: "bold",
-  },
-  mealDescription: {
-    marginVertical: 5,
-  },
-  selectedDateText: {
-    marginTop: 10,
-    fontStyle: "italic",
-  },
-  nutritionContainer: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginVertical: 10,
-  },
-  nutritionItem: {
-    alignItems: "center",
-  },
-  nutritionIcon: {
-    width: 24,
-    height: 24,
-  },
-  nutritionTitle: {
-    fontWeight: "bold",
-  },
-  expandButton: {
-    alignSelf: "center",
-    padding: 10,
 
-    borderRadius: 5,
-    marginVertical: 10,
+  // Menu Items
+  menuItem: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F0F0F0",
   },
-  itemList: {
-    maxHeight: 200,
-  },
-  mealOption: {
+  menuItemHeader: {
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    padding: 10,
+    marginBottom: 4,
   },
-  optionImage: {
-    width: 50,
-    height: 50,
-    borderRadius: 5,
+  menuItemName: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#333333",
+    flex: 1,
   },
-  optionText: {
-    marginLeft: 10,
+  menuItemNameAr: {
+    fontSize: 14,
+    color: "#666666",
+    marginBottom: 8,
+    textAlign: "right",
+  },
+  menuItemCalories: {
+    fontSize: 14,
+    color: "#FF9500",
+    fontWeight: "500",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    backgroundColor: "#FFF5E6",
+    borderRadius: 4,
+  },
+  nutritionInfo: {
+    flexDirection: "row",
+    backgroundColor: "#F8F9FA",
+    padding: 8,
+    borderRadius: 6,
+    marginTop: 8,
+  },
+  nutritionText: {
+    fontSize: 12,
+    color: "#666666",
+    marginRight: 16,
+    fontWeight: "500",
+  },
+
+  // Empty States
+  noItemsContainer: {
+    padding: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F8F9FA",
+    borderRadius: 8,
+  },
+  noMenuText: {
+    fontSize: 14,
+    color: "#666666",
+    textAlign: "center",
+  },
+  noSubscriptionContainer: {
+    padding: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  noSubscriptionText: {
+    fontSize: 16,
+    color: "#666666",
+    textAlign: "center",
+  },
+
+  // Loading States
+  menuLoader: {
+    marginTop: 24,
+    marginBottom: 24,
   },
 });
 
